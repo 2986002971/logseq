@@ -3,7 +3,6 @@
   (:require [cljs-bean.core :as bean]
             [cljs.reader]
             [frontend.commands :as commands]
-            [frontend.date :as date]
             [frontend.db :as db]
             [frontend.db.async :as db-async]
             [frontend.db.model :as db-model]
@@ -26,6 +25,7 @@
             [goog.dom :as gdom]
             [logseq.api.block :as api-block]
             [logseq.api.db-based :as db-based-api]
+            [logseq.api.plugin :as api-plugin]
             [logseq.common.path :as path]
             [logseq.outliner.property :as outliner-property]
             [logseq.common.util.date-time :as date-time-util]
@@ -105,8 +105,7 @@
 
 (defn get_today_page
   []
-  (p/let [today-name (date/today)
-          page (<get-block today-name {:children? false})]
+  (p/let [page (<get-block (db-model/get-today-journal-title) {:children? false})]
     (some-> page (sdk-utils/result->js))))
 
 (defn get_all_pages
@@ -160,15 +159,27 @@
   [name]
   (page-handler/<delete! name nil))
 
+(defn restore_page
+  [id-or-page-name]
+  (when-let [page (db-model/get-page id-or-page-name)]
+    (page-handler/restore-recycled! (:block/uuid page))))
+
 (def rename_page
   page-handler/rename!)
 
 (defn open_in_right_sidebar
-  [block-id-or-uuid]
-  (editor-handler/open-block-in-sidebar!
-   (if (number? block-id-or-uuid)
-     block-id-or-uuid
-     (sdk-utils/uuid-or-throw-error block-id-or-uuid))))
+  [block-id-or-uuid-or-key]
+  (if (or (number? block-id-or-uuid-or-key)
+        (util/uuid-string? block-id-or-uuid-or-key))
+    (editor-handler/open-block-in-sidebar!
+      (if (number? block-id-or-uuid-or-key)
+        block-id-or-uuid-or-key
+        (sdk-utils/uuid-or-throw-error block-id-or-uuid-or-key)))
+    (when-let [pid (api-plugin/get-caller-plugin-id)]
+      (state/sidebar-add-block!
+        (state/get-current-repo)
+        (keyword pid (str block-id-or-uuid-or-key))
+        :plugin))))
 
 (defn new_block_uuid []
   (str (db/new-block-id)))
@@ -360,7 +371,7 @@
   (p/let [uuid-or-page-name (or
                              uuid-or-page-name
                              (state/get-current-page)
-                             (date/today))
+                             (db-model/get-today-journal-title))
           block           (<get-block uuid-or-page-name)
           new-page        (when (and (not block) (not (util/uuid-string? uuid-or-page-name))) ; page not exists
                             (page-handler/<create! uuid-or-page-name
@@ -375,7 +386,7 @@
   []
   (or
    (state/get-current-page)
-   (date/today)))
+   (db-model/get-today-journal-title)))
 
 (defn append_block_in_page
   ([content]
@@ -388,7 +399,7 @@
    (let [uuid-or-page-name (or
                             uuid-or-page-name
                             (state/get-current-page)
-                            (date/today))]
+                            (db-model/get-today-journal-title))]
      (p/let [_ (<ensure-page-loaded uuid-or-page-name)
              page? (not (util/uuid-string? uuid-or-page-name))
              page (db-model/get-page uuid-or-page-name)

@@ -75,11 +75,11 @@
 
 (defn usage []
   (str "Usage:\n"
-       "  yarn -s nbb-logseq -cp src:../outliner/src:../common/src:../graph-parser/src script/replay_sync_sqlite.cljs \\\n"
+       "  pnpm exec nbb-logseq -cp src:../outliner/src:../common/src:../graph-parser/src script/replay_sync_sqlite.cljs \\\n"
        "    --server-db <server-db.sqlite> --client-ops-db <client-ops.sqlite> [--from-t <n>] [--to-t <n>] [--mode both] [--pretty]\n"
        "\n"
        "Examples:\n"
-       "  yarn -s nbb-logseq -cp src:../outliner/src:../common/src:../graph-parser/src script/replay_sync_sqlite.cljs \\\n"
+       "  pnpm exec nbb-logseq -cp src:../outliner/src:../common/src:../graph-parser/src script/replay_sync_sqlite.cljs \\\n"
        "    --server-db /path/server/db.sqlite --client-ops-db /path/electron_client_ops.sqlite \\\n"
        "    --auto-from-conflict --local-created-at-max 1775717890000 --mode both --pretty\n"
        "\n"
@@ -704,6 +704,12 @@
       v)
     v))
 
+(defn ref-attr?
+  [db attr]
+  (= :db.type/ref
+     (or (get-in (d/schema db) [attr :db/valueType])
+         (:db/valueType (d/entity db attr)))))
+
 (defn resolve-temp-id
   [db datom-v]
   (if (and (vector? datom-v)
@@ -711,7 +717,9 @@
            (= (first datom-v) :db/add))
     (let [[op e a v t] datom-v
           e' (replace-uuid-str-with-eid db e)
-          v' (replace-uuid-str-with-eid db v)]
+          v' (if (ref-attr? db a)
+               (replace-uuid-str-with-eid db v)
+               v)]
       [op e' a v' t])
     datom-v))
 

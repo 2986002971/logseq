@@ -1,7 +1,8 @@
 (ns frontend.worker.sync.client-op
   "Store client sync metadata and ops in sqlite tables.
    DataScript client-op storage is deprecated and unsupported."
-  (:require [datascript.core :as d]
+  (:require [clojure.string :as string]
+            [datascript.core :as d]
             [frontend.worker.state :as worker-state]
             [goog.object :as gobj]
             [lambdaisland.glogi :as log]
@@ -31,7 +32,7 @@
 
 (defonce *repo->pending-local-tx-count (atom {}))
 
-(def ^:private sqlite-schema-ready-key "__logseq_client_ops_schema_ready")
+(def ^:private sqlite-schema-ready-key "__logseq_client_ops_schema_ready_v2")
 (def ^:private sqlite-mode-key "__logseq_client_ops_sqlite_mode")
 (def ^:private sync-meta-table-sql
   "create table if not exists sync_meta (key text primary key, value text)")
@@ -59,6 +60,18 @@
   "create index if not exists idx_client_ops_pending_created on client_ops(kind, pending, created_at, id)")
 (def ^:private asset-index-sql
   "create index if not exists idx_client_ops_asset_uuid on client_ops(kind, asset_uuid)")
+(def ^:private sync-conflicts-table-sql
+  (str "create table if not exists sync_conflicts ("
+       "id integer primary key autoincrement,"
+       "block_uuid text not null,"
+       "attr text not null,"
+       "value text not null,"
+       "remote_t integer,"
+       "created_at integer not null,"
+       "unique(block_uuid, attr, value)"
+       ")"))
+(def ^:private sync-conflicts-block-index-sql
+  "create index if not exists idx_sync_conflicts_block_uuid on sync_conflicts(block_uuid, created_at)")
 
 (defn- client-ops-store
   [repo]
@@ -124,6 +137,19 @@
     :else nil))
 
 (defn- str->kw
+  [v]
+  (when (string? v)
+    (keyword v)))
+
+(defn- qualified-kw->str
+  [v]
+  (cond
+    (qualified-keyword? v) (subs (str v) 1)
+    (keyword? v) (name v)
+    (string? v) v
+    :else nil))
+
+(defn- str->qualified-kw
   [v]
   (when (string? v)
     (keyword v)))
@@ -211,8 +237,10 @@
        (fn [tx]
          (sqlite-run! tx sync-meta-table-sql [])
          (sqlite-run! tx client-ops-table-sql [])
+         (sqlite-run! tx sync-conflicts-table-sql [])
          (sqlite-run! tx pending-index-sql [])
-         (sqlite-run! tx asset-index-sql [])))
+         (sqlite-run! tx asset-index-sql [])
+         (sqlite-run! tx sync-conflicts-block-index-sql [])))
       (try
         (gobj/set db sqlite-schema-ready-key true)
         (catch :default _
@@ -230,10 +258,6 @@
                     " on conflict(key) do update set value = excluded.value")
                [(name k) (str v)]))
 
-(defn- sqlite-delete-meta!
-  [db k]
-  (sqlite-run! db "delete from sync_meta where key = ?" [(name k)]))
-
 (defn update-graph-uuid
   [repo graph-uuid]
   {:pre [(some? graph-uuid)]}
@@ -242,15 +266,34 @@
 
 (defn get-graph-uuid
   [repo]
-  (some-> (sqlite-store-or-throw repo)
-          (sqlite-get-meta :graph-uuid)))
+  (when-let [store (sqlite-store-or-throw repo)]
+    (sqlite-get-meta store :graph-uuid)))
+
+(defn get-local-tx
+  [repo]
+  (when-let [store (sqlite-store-or-throw repo)]
+    (when-let [result (sqlite-get-meta store :local-tx)]
+      (js/parseInt result 10))))
 
 (defn update-local-tx
   [repo t]
-  {:pre [(some? t)]}
+  {:pre [(and (integer? t) (>= t 0))]}
+  (let [store (sqlite-store-or-throw repo)
+        prev-t (get-local-tx repo)]
+    (assert (some? store) repo)
+    (when (and prev-t (< t prev-t))
+      (throw (ex-info "local-tx should be monotonically increasing"
+                      {:repo repo
+                       :prev-t prev-t
+                       :new-t t})))
+    (sqlite-set-meta! store :local-tx t)))
+
+(defn reset-local-tx
+  "Should be used only when uploading a graph"
+  [repo]
   (let [store (sqlite-store-or-throw repo)]
     (assert (some? store) repo)
-    (sqlite-set-meta! store :local-tx t)))
+    (sqlite-set-meta! store :local-tx 0)))
 
 (defn update-local-checksum
   [repo checksum]
@@ -258,17 +301,6 @@
   (let [store (sqlite-store-or-throw repo)]
     (assert (some? store) repo)
     (sqlite-set-meta! store :db-sync/checksum checksum)))
-
-(defn remove-local-tx
-  [repo]
-  (when-let [store (sqlite-store-or-throw repo)]
-    (sqlite-delete-meta! store :local-tx)))
-
-(defn get-local-tx
-  [repo]
-  (when-let [store (sqlite-store-or-throw repo)]
-    (some-> (sqlite-get-meta store :local-tx)
-            (js/parseInt 10))))
 
 (defn get-pending-local-tx-count
   [repo]
@@ -311,15 +343,15 @@
       {:tx-id tx-id
        :outliner-op (str->kw (aget row "outliner_op"))
        :forward-outliner-ops (or (normalize-op-entries
-                                  (sqlite-util/transit-read (aget row "forward_outliner_ops")))
+                                  (sqlite-util/read-transit-str (aget row "forward_outliner_ops")))
                                  [])
        :inverse-outliner-ops (or (normalize-op-entries
-                                  (sqlite-util/transit-read (aget row "inverse_outliner_ops")))
+                                  (sqlite-util/read-transit-str (aget row "inverse_outliner_ops")))
                                  [])
        :inferred-outliner-ops? (int->bool (aget row "inferred_outliner_ops"))
        :db-sync/undo-redo (str->kw (aget row "undo_redo"))
-       :tx (sqlite-util/transit-read (aget row "normalized_tx_data"))
-       :reversed-tx (sqlite-util/transit-read (aget row "reversed_tx_data"))})))
+       :tx (sqlite-util/read-transit-str (aget row "normalized_tx_data"))
+       :reversed-tx (sqlite-util/read-transit-str (aget row "reversed_tx_data"))})))
 
 (defn upsert-local-tx-entry!
   [repo {:keys [tx-id created-at pending? failed? outliner-op undo-redo
@@ -362,11 +394,11 @@
                     (bool->int failed?)
                     (kw->str outliner-op)
                     (kw->str undo-redo)
-                    (sqlite-util/transit-write forward-outliner-ops')
-                    (sqlite-util/transit-write inverse-outliner-ops')
+                    (sqlite-util/write-transit-str forward-outliner-ops')
+                    (sqlite-util/write-transit-str inverse-outliner-ops')
                     (bool->int inferred-outliner-ops?)
-                    (sqlite-util/transit-write (or normalized-tx-data []))
-                    (sqlite-util/transit-write (or reversed-tx-data []))])
+                    (sqlite-util/write-transit-str (or normalized-tx-data []))
+                    (sqlite-util/write-transit-str (or reversed-tx-data []))])
       {:tx-id tx-id
        :created-at created-at'
        :should-inc-pending? should-inc-pending?})))
@@ -396,6 +428,57 @@
       (->> rows
            (keep row->pending-local-tx)
            vec))))
+
+(defn add-sync-conflicts!
+  [repo conflicts]
+  (when-let [store (sqlite-store-or-throw repo)]
+    (let [now (.now js/Date)]
+      (doseq [{:keys [block-uuid attr value remote-t]} conflicts]
+        (when (and (uuid? block-uuid)
+                   (qualified-keyword? attr)
+                   (string? value))
+          (let [attr-str (qualified-kw->str attr)]
+            (sqlite-run! store
+                         "delete from sync_conflicts where block_uuid = ? and attr = ?"
+                         [(str block-uuid) attr-str])
+            (when-not (string/blank? value)
+              (sqlite-run! store
+                           (str "insert into sync_conflicts "
+                                "(block_uuid, attr, value, remote_t, created_at) "
+                                "values (?, ?, ?, ?, ?) "
+                                "on conflict(block_uuid, attr, value) do update set "
+                                "remote_t = excluded.remote_t, "
+                                "created_at = excluded.created_at")
+                           [(str block-uuid)
+                            attr-str
+                            value
+                            remote-t
+                            now]))))))))
+
+(defn get-sync-conflicts
+  [repo block-uuid]
+  (when (uuid? block-uuid)
+    (when-let [store (sqlite-store-or-throw repo)]
+      (->> (sqlite-rows store
+                        (str "select id, block_uuid, attr, value, remote_t, created_at "
+                             "from sync_conflicts where block_uuid = ? "
+                             "order by created_at desc, id desc")
+                        [(str block-uuid)])
+           (mapv (fn [row]
+                   {:id (aget row "id")
+                    :block-uuid (parse-uuid-str (aget row "block_uuid"))
+                    :attr (str->qualified-kw (aget row "attr"))
+                    :value (aget row "value")
+                    :remote-t (aget row "remote_t")
+                    :created-at (aget row "created_at")}))))))
+
+(defn clear-sync-conflicts!
+  [repo block-uuid]
+  (when (uuid? block-uuid)
+    (when-let [store (sqlite-store-or-throw repo)]
+      (sqlite-run! store
+                   "delete from sync_conflicts where block_uuid = ?"
+                   [(str block-uuid)]))))
 
 (defn- pending-tx-id?
   [store tx-id]
@@ -458,7 +541,7 @@
                              [(str block-uuid)])]
     (let [op-type (str->kw (aget row "asset_op"))
           t (aget row "asset_t")
-          value (or (some-> (aget row "asset_value") sqlite-util/transit-read)
+          value (or (some-> (aget row "asset_value") sqlite-util/read-transit-str)
                     {:block-uuid block-uuid})]
       (local-asset-op-map op-type t value))))
 
@@ -478,7 +561,7 @@
                      (str block-uuid)
                      (kw->str op-type)
                      t
-                     (sqlite-util/transit-write value)])))))
+                     (sqlite-util/write-transit-str value)])))))
 
 ;;; asset ops
 (defn add-asset-ops
@@ -538,7 +621,7 @@
          (keep (fn [row]
                  (let [op-type (str->kw (aget row "asset_op"))
                        t (aget row "asset_t")
-                       value (some-> (aget row "asset_value") sqlite-util/transit-read)]
+                       value (some-> (aget row "asset_value") sqlite-util/read-transit-str)]
                    (when (and op-type (map? value) (:block-uuid value))
                      (local-asset-op-map op-type t value)))))
          vec)))

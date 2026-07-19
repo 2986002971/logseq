@@ -30,7 +30,9 @@ This guide helps AI agents implement and review db-sync features consistently ac
   - Response parse/coercion failures (e.g., transit decode, malli coercion).
   - Unexpected WS/HTTP message type or reason value on the client.
   - Asset operations missing required fields when processing client-side metadata.
-  - Invariant violations in tx apply (e.g., tx-data empty after normalization).
+  - Invariant violations in tx apply (e.g., an originally empty delete tx).
+- Retry-safe operations may normalize to an intentional no-op. For example, a
+  non-empty delete tx is already satisfied when its target no longer exists.
 - Server-side validation of client input should not throw. Respond with `tx/reject` or `400` errors for:
   - tx payload type mismatch (e.g., `:txs` not a sequence of strings).
   - Invalid graph identity (missing/empty graph id or uuid in sync path).
@@ -45,10 +47,10 @@ This guide helps AI agents implement and review db-sync features consistently ac
 - See `docs/agent-guide/db-sync/protocol.md` for request/response shapes.
 
 ## Testing & Verification
-- Local dev(client+server): `bb dev:db-sync-start` runs the db-sync watcher, `wrangler dev`, and `yarn watch` with `ENABLE_DB_SYNC_LOCAL=true`
+- Local dev(client+server): `bb dev:db-sync-start` runs the db-sync watcher, `wrangler dev`, and `pnpm watch` with `ENABLE_DB_SYNC_LOCAL=true`
 - DB-sync server side unit-tests: `bb dev:db-sync-test`
-- Node adapter tests: `cd deps/db-sync && npm run test:node-adapter`
-- Node adapter build/run: `cd deps/db-sync && npm run build:node-adapter && npm run start:node-adapter`
+- Node adapter tests: `cd deps/db-sync && pnpm test:node-adapter`
+- Node adapter build/run: `cd deps/db-sync && pnpm build:node-adapter && pnpm start:node-adapter`
 
 ## Review Checklist
 - Protocol versioning and error handling are consistent across client/server.

@@ -6,14 +6,15 @@
             [clojure.string :as string]
             [datascript.impl.entity :as de]
             [frontend.db :as db]
+            [frontend.context.i18n :refer [t]]
             [frontend.format.mldoc :as mldoc]
             [frontend.handler.db-based.sync :as rtc-handler]
             [frontend.handler.notification :as notification]
             [frontend.persist-db :as persist-db]
             [frontend.state :as state]
-            [frontend.ui :as ui]
             [frontend.util :as util]
             [frontend.util.page :as page-util]
+            [logseq.shui.ui :as shui]
             [logseq.db :as ldb]
             [logseq.db.frontend.property :as db-property]
             [promesa.core :as p]))
@@ -47,8 +48,9 @@
       [:pre.code (str "ID: " (:db/id result) "\n"
                       pull-data)]
       [:br]
-      (ui/button "Copy to clipboard"
-                 :on-click #(.writeText js/navigator.clipboard pull-data))]
+      (shui/button {:size :sm
+                    :on-click #(.writeText js/navigator.clipboard pull-data)}
+                   (t :ui/copy-to-clipboard))]
      :success
      false)))
 
@@ -61,8 +63,9 @@
     (notification/show!
      [:div.ls-wrap-widen
       ;; Show clipboard at top since content is really long for pages
-      (ui/button "Copy to clipboard"
-                 :on-click #(.writeText js/navigator.clipboard ast-data))
+      (shui/button {:size :sm
+                    :on-click #(.writeText js/navigator.clipboard ast-data)}
+                   (t :ui/copy-to-clipboard))
       [:br]
       [:pre.code ast-data]]
      :success
@@ -73,17 +76,17 @@
   ;; Use editor state to locate most recent block
   (if-let [block-uuid (:block-id (first (state/get-editor-args)))]
     (show-entity-data [:block/uuid block-uuid])
-    (notification/show! "No block found" :warning)))
+    (notification/show! (t :block/not-found-warning) :warning)))
 
 (defn ^:export show-block-ast []
   (if-let [{:block/keys [title format]} (:block (first (state/get-editor-args)))]
     (show-content-ast title (or format :markdown))
-    (notification/show! "No block found" :warning)))
+    (notification/show! (t :block/not-found-warning) :warning)))
 
 (defn ^:export show-page-data []
   (if-let [page-id (page-util/get-current-page-id)]
     (show-entity-data page-id)
-    (notification/show! "No page found" :warning)))
+    (notification/show! (t :page/not-found-warning) :warning)))
 
 (defn ^:export validate-db []
   (state/<invoke-db-worker :thread-api/validate-db (state/get-current-repo)))
@@ -101,24 +104,6 @@
       (string/replace #"^/+" "")
       (string/replace #"[\\/]+" "_")
       (str "_client_ops_" (quot (util/time-ms) 1000))))
-
-(defn- ->uint8array
-  [data]
-  (cond
-    (instance? js/Uint8Array data)
-    data
-
-    (js/ArrayBuffer.isView data)
-    (js/Uint8Array. (.-buffer data) (.-byteOffset data) (.-byteLength data))
-
-    (instance? js/ArrayBuffer data)
-    (js/Uint8Array. data)
-
-    (array? data)
-    (js/Uint8Array. data)
-
-    :else
-    nil))
 
 (defn- <fetch-server-checksum-diagnostics
   [repo]
@@ -211,46 +196,50 @@
                                                nil)))]
                         (utils/saveToFile blob filename "edn")
                         (notification/show!
-                         (str "Checksum recomputed. Recomputed: " recomputed-checksum
-                              ", local: " (or local-checksum "<nil>")
-                              ", remote: " (or remote-checksum "<nil>")
-                              ". Downloaded " filename ".edn with " (count blocks)
-                              " blocks and checksum attrs " (pr-str checksum-attrs) ".")
+                         (t :graph.diagnostics/checksum-recomputed-success
+                            recomputed-checksum
+                            (or local-checksum "<nil>")
+                            (or remote-checksum "<nil>")
+                            filename
+                            (count blocks)
+                            (pr-str checksum-attrs))
                          :success
                          false)))
-                    (notification/show! "Unable to compute checksum diagnostics for current graph." :warning))))
+                    (notification/show! (t :graph.diagnostics/checksum-unavailable-warning) :warning))))
         (p/catch (fn [error]
                    (js/console.error "recompute-checksum-diagnostics failed:" error)
-                   (notification/show! "Failed to compute graph checksum diagnostics." :error))))
-    (notification/show! "No graph found" :warning)))
+                   (notification/show! (t :graph.diagnostics/checksum-failed-error) :error))))
+    (notification/show! (t :graph.diagnostics/no-graph-warning) :warning)))
 
 (defn ^:export export-client-ops-sqlite
   []
-  (if-let [repo (state/get-current-repo)]
-    (-> (state/<invoke-db-worker-direct-pass :thread-api/export-client-ops-db repo)
-        (p/then (fn [data]
-                  (if-let [payload (->uint8array data)]
-                    (let [filename (client-ops-export-file-name repo)
-                          blob (js/Blob. #js [payload] (clj->js {:type "application/octet-stream"}))]
-                      (utils/saveToFile blob filename "sqlite")
+  (if (and util/web-platform? (not (util/electron?)))
+    (if-let [repo (state/get-current-repo)]
+      (-> (state/<invoke-db-worker :thread-api/export-client-ops-db-binary repo)
+          (p/then (fn [data]
+                    (if (instance? js/Uint8Array data)
+                      (let [filename (client-ops-export-file-name repo)
+                            blob (js/Blob. #js [data] (clj->js {:type "application/octet-stream"}))]
+                        (utils/saveToFile blob filename "sqlite")
+                        (notification/show!
+                         (t :graph.diagnostics/client-ops-export-success filename)
+                         :success
+                         false))
                       (notification/show!
-                       (str "Client ops SQLite exported: " filename ".sqlite")
-                       :success
-                       false))
-                    (notification/show!
-                     (str "Client ops SQLite export failed: invalid payload type "
-                          (pr-str (type data))
-                          ".")
-                     :warning))))
+                       (t :graph.diagnostics/client-ops-export-invalid-payload-warning
+                          (pr-str (type data)))
+                       :warning))))
         (p/catch (fn [error]
                    (js/console.error "export-client-ops-sqlite failed:" error)
-                   (notification/show! "Failed to export client ops SQLite." :error))))
-    (notification/show! "No graph found" :warning)))
+                   (notification/show! (t :graph.diagnostics/client-ops-export-failed-error) :error))))
+      (notification/show! (t :graph.diagnostics/no-graph-warning) :warning))
+    (notification/show! (t :graph.diagnostics/client-ops-export-invalid-payload-warning "web app only")
+                        :warning)))
 
 (defn import-chosen-graph
   [repo]
   (p/let [_ (persist-db/<unsafe-delete repo)]
-    (notification/show! "Graph updated! Switching to graph ..." :success)
+    (notification/show! (t :graph/updated-switching) :success)
     (state/pub-event! [:graph/switch repo])))
 
 (defn ^:export replace-graph-with-db-file []

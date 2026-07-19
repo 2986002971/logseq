@@ -14,7 +14,7 @@
     <a href="https://logseq.com">Home Page</a> |
     <a href="https://blog.logseq.com/">Blog</a> |
     <a href="https://docs.logseq.com/">Documentation</a> |
-    <a href="https://discuss.logseq.com/t/logseq-product-roadmap/34267">Roadmap</a>
+    <a href="https://logseq.io/p/NX4mc_ggEV">Roadmap</a>
 </div>
 <br></br>
 
@@ -73,8 +73,8 @@ The Database version (DB version) of Logseq introduces DB graphs. [See this page
 The DB version is in beta status while the new mobile app and RTC is in alpha. This means that **data loss is possible** so we recommend [automated backups](https://github.com/logseq/docs/blob/master/db-version.md#automated-backup) or [regular SQLite DB backups](https://github.com/logseq/docs/blob/master/db-version.md#graph-export). We recommend you create a dedicated test graph and choose one project that’s not crucial for you.
 
 To get started with the DB version:
-* To try the latest web version, go to https://test.logseq.com/.
-* To try the latest desktop version, login to Github and go to https://github.com/logseq/logseq/actions/workflows/build-desktop-release.yml and click on the latest release. Scroll to the bottom and under the `Artifacts` section download the artifact for your operating system.
+* To try the latest web version, go to https://app.logseq.com/.
+* To try the latest desktop version, go to https://github.com/logseq/logseq/releases/tag/nightly and download the artifact for your operating system.
 * To try the latest by building from the source code
     * Use `test/db` for stable releases. Fewer bugs and slower updates. Update frequency: days or weeks.
     * Use `master` for the latest updates as they are developed. Expect more bugs and faster changes. Update frequency: hours or days.
@@ -168,6 +168,10 @@ us improve Logseq. We look forward to your contributions 🚀
 If you want to set up a development environment for the Logseq web or desktop app, please refer to the [Develop Logseq](docs/develop-logseq.md) guide for macOS/Linux users and the [Develop Logseq on Windows](docs/develop-logseq-on-windows.md) guide for Windows users.
 
 In addition to these guides, you can also find other helpful resources in the [docs/](docs/) folder, such as the [Guide for Contributing to Translations](docs/contributing-to-translations.md), the [Docker Web App Guide](docs/docker-web-app-guide.md) and the [mobile development guide](docs/develop-logseq-on-mobile.md)
+
+### 🧰 Logseq CLI (Node)
+
+Logseq CLI documentation is maintained in `docs/cli/logseq-cli.md`.
 
 ## ✨ Inspiration
 

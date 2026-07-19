@@ -189,7 +189,7 @@ const inputTypes = [
   window.HTMLTextAreaElement,
 ]
 
-export const triggerInputChange = (node, value = '', name = 'change') => {
+export const triggerInputChange = (node, value = '', caretPosition) => {
 
   // only process the change on elements we know have a value setter in their constructor
   if (inputTypes.indexOf(node.__proto__.constructor) > -1) {
@@ -200,6 +200,9 @@ export const triggerInputChange = (node, value = '', name = 'change') => {
     })
 
     setValue.call(node, value)
+    if (Number.isInteger(caretPosition)) {
+      node.setSelectionRange(caretPosition, caretPosition)
+    }
     node.dispatchEvent(event)
   }
 }
@@ -260,57 +263,71 @@ export const getClipText = (cb, errorHandler) => {
   })
 }
 
-export const writeClipboard = ({text, html, blocks}, ownerWindow) => {
-    const navigator = (ownerWindow || window).navigator
+const copiedBlocksMemoryCache = {
+  text: null,
+  blocks: null
+}
 
-    navigator.permissions.query({
-        name: "clipboard-write"
-    }).then((result) => {
-        if (result.state != "granted" && result.state != "prompt"){
-            console.debug("Copy without `clipboard-write` permission:", text)
-            return
-        }
-        let promise_written = null
-        if (typeof ClipboardItem !== 'undefined') {
-            let blob = new Blob([text], {
-              type: ["text/plain"]
-            });
-            let data = [new ClipboardItem({
-                ["text/plain"]: blob
-            })];
-            if (html) {
-                let richBlob = new Blob([html], {
-                    type: ["text/html"]
-                })
-                data = [new ClipboardItem({
-                    ["text/plain"]: blob,
-                    ["text/html"]: richBlob
-                })];
-            }
-          if (blocks) {
-            let blocksBlob = new Blob([blocks], {
-              type: ["web application/logseq"]
-            })
-            let richBlob = new Blob([html], {
-              type: ["text/html"]
-            })
-            data = [new ClipboardItem({
-              ["text/plain"]: blob,
-              ["text/html"]: richBlob,
-              ["web application/logseq"]: blocksBlob
-            })];
-          }
-            promise_written = navigator.clipboard.write(data)
-        } else {
-            console.debug("Degraded copy without `ClipboardItem` support:", text)
-            promise_written = navigator.clipboard.writeText(text)
-        }
-        promise_written.then(() => {
-            /* success */
-        }).catch(e => {
-            console.log(e, "fail")
+export const getCopiedBlocksFromMemory = (text) => {
+  if (!text || copiedBlocksMemoryCache.text !== text) return null
+  return copiedBlocksMemoryCache.blocks
+}
+
+export const writeClipboard = ({text, html, blocks}, ownerWindow) => {
+  const navigator = (ownerWindow || window).navigator
+  const textBlob = new Blob([text], {
+    type: "text/plain"
+  })
+  copiedBlocksMemoryCache.text = text
+  copiedBlocksMemoryCache.blocks = blocks || null
+
+  navigator.permissions.query({
+    name: "clipboard-write"
+  }).then((result) => {
+    if (result.state != "granted" && result.state != "prompt"){
+      console.debug("Copy without `clipboard-write` permission:", text)
+      return
+    }
+    let promise_written = null
+    if (typeof ClipboardItem !== "undefined") {
+      let data = [new ClipboardItem({
+        ["text/plain"]: textBlob
+      })]
+      if (html) {
+        const richBlob = new Blob([html], {
+          type: "text/html"
         })
+        data = [new ClipboardItem({
+          ["text/plain"]: textBlob,
+          ["text/html"]: richBlob
+        })]
+      }
+      if (blocks) {
+        const blocksBlob = new Blob([blocks], {
+          type: "application/logseq"
+        })
+        const clipboardItemData = {
+          ["text/plain"]: textBlob,
+          ["web application/logseq"]: blocksBlob
+        }
+        if (html) {
+          clipboardItemData["text/html"] = new Blob([html], {
+            type: "text/html"
+          })
+        }
+        data = [new ClipboardItem(clipboardItemData)]
+      }
+      promise_written = navigator.clipboard.write(data)
+    } else {
+      console.debug("Degraded copy without `ClipboardItem` support:", text)
+      promise_written = navigator.clipboard.writeText(text)
+    }
+    promise_written.then(() => {
+      /* success */
+    }).catch(e => {
+      console.log(e, "fail")
     })
+  })
 }
 
 export const toPosixPath = (input) => {
@@ -497,6 +514,31 @@ export function base64ToUint8Array (base64String) {
     return uint8Array
   } catch (e) {
     console.error('Invalid Base64 string:', e)
+    return null
+  }
+}
+
+export function uint8ArrayToBase64 (uint8Array) {
+  try {
+    let bytes = null
+    if (uint8Array instanceof Uint8Array) {
+      bytes = uint8Array
+    } else if (ArrayBuffer.isView(uint8Array)) {
+      bytes = new Uint8Array(uint8Array.buffer, uint8Array.byteOffset, uint8Array.byteLength)
+    } else if (uint8Array instanceof ArrayBuffer) {
+      bytes = new Uint8Array(uint8Array)
+    } else {
+      throw new TypeError('Expected Uint8Array, TypedArray, or ArrayBuffer')
+    }
+
+    let binary = ''
+    const len = bytes.byteLength
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i])
+    }
+    return btoa(binary)
+  } catch (e) {
+    console.error('Error converting Uint8Array to base64:', e)
     return null
   }
 }

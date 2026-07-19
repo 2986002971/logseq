@@ -6,7 +6,6 @@
             [frontend.common.search-fuzzy :as fuzzy]
             [frontend.config :as config]
             [frontend.db :as db]
-            [frontend.handler.notification :as notification]
             [frontend.search :as search]
             [frontend.state :as state]
             [frontend.util :as util]
@@ -100,7 +99,7 @@
             :search/q ""}]
      (swap! state/state merge m)
      (when config/lsp-enabled? (state/reset-plugin-search-engines)))
-   (when (and clear-search-mode? (not= (state/get-search-mode) :graph))
+   (when clear-search-mode?
      (state/set-search-mode! :global))))
 
 (defn rebuild-indices!
@@ -108,13 +107,11 @@
    (rebuild-indices! false))
   ([notice?]
    (println "Starting to rebuild search indices!")
-   (when (state/get-current-repo)
+   (when-let [repo (state/get-current-repo)]
+     (when notice?
+       (state/set-state! [:search/index-build-notify-repos repo] true))
      (p/do!
-      (search/rebuild-indices!)
-      (when notice?
-        (notification/show!
-         "Search indices rebuilt successfully!"
-         :success))))))
+      (search/rebuild-indices!)))))
 
 (defn highlight-exact-query
   [content q]
@@ -152,4 +149,4 @@
                                         content
                                         result)))
                              (conj result [:span content])))]
-            [:span {:class "m-0"} elements]))))))
+            (into [:span {:class "m-0"}] elements)))))))
